@@ -24,8 +24,14 @@ function log_error() {
 }
 
 function usage() {
-    echo "Usage: $0 link [antigravity|claude] [target_path] [--skills skill1,skill2] [--rules rule1,rule2] [--agents agent1,agent2] [--commands cmd1,cmd2]"
-    echo "Example: $0 link antigravity ./my-project --skills tdd-workflow --rules golang --agents code-reviewer --commands build-fix"
+    echo "Usage:"
+    echo "  $0 link [antigravity|claude] [target_path] [--skills skill1,skill2] [--rules rule1,rule2] [--agents agent1,agent2] [--commands cmd1,cmd2]"
+    echo "  $0 unlink [antigravity|claude] [target_path]"
+    echo ""
+    echo "Examples:"
+    echo "  $0 link antigravity ./my-project --skills tdd-workflow --rules golang --agents code-reviewer --commands build-fix"
+    echo "  $0 unlink antigravity ./my-project"
+    echo "  $0 unlink claude"
     exit 1
 }
 
@@ -180,6 +186,83 @@ function init_project_meta() {
     log_info "Updated .cursorrules link"
 }
 
+function remove_nexus_links() {
+    local target_dir="$1"
+
+    if [ ! -d "$target_dir" ]; then
+        return
+    fi
+
+    local found=false
+    for link in "$target_dir"/*; do
+        if [ -L "$link" ]; then
+            local link_target
+            link_target="$(readlink "$link")"
+            if [[ "$link_target" == "$SOURCE_DIR"* ]]; then
+                rm -f "$link"
+                log_info "Removed link: $(basename "$link") -> $link_target"
+                found=true
+            fi
+        fi
+    done
+
+    if [ "$found" = false ]; then
+        log_info "No nexus links found in $target_dir"
+    fi
+
+    # Remove directory if empty
+    if [ -d "$target_dir" ] && [ -z "$(ls -A "$target_dir")" ]; then
+        rmdir "$target_dir"
+        log_info "Removed empty directory: $target_dir"
+    fi
+}
+
+function unlink_antigravity() {
+    local project_path="$1"
+
+    if [ -z "$project_path" ]; then
+        log_error "Target project path required for antigravity"
+        usage
+    fi
+
+    if [ ! -d "$project_path" ]; then
+        log_error "Target directory does not exist: $project_path"
+        exit 1
+    fi
+
+    log_info "Unlinking Antigravity config from: $project_path"
+
+    remove_nexus_links "$project_path/.agents/rules"
+    remove_nexus_links "$project_path/.agents/skills"
+    remove_nexus_links "$project_path/.agents/agents"
+    remove_nexus_links "$project_path/.agents/workflows"
+
+    # Remove .agents directory if empty
+    if [ -d "$project_path/.agents" ] && [ -z "$(ls -A "$project_path/.agents")" ]; then
+        rmdir "$project_path/.agents"
+        log_info "Removed empty directory: $project_path/.agents"
+    fi
+
+    # Remove .cursorrules if it's a symlink to AGENTS.md
+    if [ -L "$project_path/.cursorrules" ]; then
+        local cursorrules_target
+        cursorrules_target="$(readlink "$project_path/.cursorrules")"
+        if [[ "$cursorrules_target" == "AGENTS.md" ]]; then
+            rm -f "$project_path/.cursorrules"
+            log_info "Removed .cursorrules symlink"
+        fi
+    fi
+
+    log_info "Unlink complete! (AGENTS.md preserved if present)"
+}
+
+function unlink_claude() {
+    log_info "Unlinking Claude Code global config..."
+    remove_nexus_links "$HOME/.claude/rules"
+    remove_nexus_links "$HOME/.claude/commands"
+    log_info "Global unlink complete!"
+}
+
 function sync_antigravity() {
     local project_path="$1"
     local skills="$2"
@@ -196,10 +279,10 @@ function sync_antigravity() {
 
     log_info "Syncing Antigravity config to: $project_path"
     
-    sync_rules "$project_path/.agent/rules" "$RULES_ARG"
-    sync_skills "$project_path/.agent/skills" "$skills"
-    sync_agents "$project_path/.agent/agents" "$AGENTS_ARG"
-    sync_commands "$project_path/.agent/workflows" "$COMMANDS_ARG"
+    sync_rules "$project_path/.agents/rules" "$RULES_ARG"
+    sync_skills "$project_path/.agents/skills" "$skills"
+    sync_agents "$project_path/.agents/agents" "$AGENTS_ARG"
+    sync_commands "$project_path/.agents/workflows" "$COMMANDS_ARG"
     init_project_meta "$project_path"
     
     log_info "Sync complete!"
@@ -269,11 +352,17 @@ if [ -z "$ACTION" ] || [ -z "$TOOL" ]; then
     usage
 fi
 
-case "$TOOL" in
-    "antigravity")
+case "${ACTION}_${TOOL}" in
+    "link_antigravity")
         sync_antigravity "$TARGET" "$SKILLS_ARG"
         ;;
-    "claude")
+    "link_claude")
         sync_claude
+        ;;
+    "unlink_antigravity")
+        unlink_antigravity "$TARGET"
+        ;;
+    "unlink_claude")
+        unlink_claude
         ;;
 esac
